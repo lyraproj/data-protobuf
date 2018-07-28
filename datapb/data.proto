@@ -1,0 +1,56 @@
+syntax = "proto3";
+package puppet.datapb;
+
+option go_package = "github.com/puppetlabs/data-protobuf/datapb";
+
+// `DataHash` represents an ordered hash of Data values, consisting of fields
+// which map to dynamically typed values. In some languages, `DataHash`
+// might be supported by a native representation. For example, in scripting
+// languages like JS, a data hash is represented as an object.
+message DataHash {
+  // Ordered list of associations between strings and dynamically typed values.
+  repeated DataEntry entries = 1;
+}
+
+// `DataEntry` represents one association between a key and a value
+// in the ordered `DataHash`
+message DataEntry {
+  string key = 1;
+  Data value = 2;
+}
+
+// `Data` represents a dynamically typed value which can be either
+// null, an integer, a float, a string, a boolean, a recursive data hash, or an
+// array of data.
+message Data {
+  // The kind of value.
+  oneof kind {
+    // Represents an Undef value.
+    NullValue undef_value = 1;
+    // Represents an Integer value.
+    int64 integer_value = 2;
+    // Represents a Float value.
+    double float_value = 3;
+    // Represents a String value.
+    string string_value = 4;
+    // Represents a Boolean value.
+    bool boolean_value = 5;
+    // Represents a Hash[String,Data] value.
+    DataHash hash_value = 6;
+    // Represents an Array[Data].
+    DataArray array_value = 7;
+  }
+}
+
+// `NullValue` is a singleton enumeration to represent the null value for the
+// `Value` type union.
+enum NullValue {
+  // Null value.
+  NULL_VALUE = 0;
+}
+
+// `DataArray` is a wrapper around a repeated field of Data values.
+message DataArray {
+  // Repeated field of dynamically typed values.
+  repeated Data values = 1;
+}
