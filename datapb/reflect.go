@@ -5,6 +5,19 @@ import (
 	"fmt"
 )
 
+func ToDataHash(h map[string]reflect.Value) (*DataHash, error) {
+	cnt := len(h)
+	els := make([]*DataEntry, 0, cnt)
+	for k, v := range h {
+		dev, err := ToData(v)
+		if err != nil {
+			return nil, err
+		}
+		els = append(els, &DataEntry{k, dev})
+	}
+	return &DataHash{els}, nil
+}
+
 func ToData(v reflect.Value) (value *Data, err error) {
 	if !v.IsValid() {
 		value = &Data{Kind: &Data_UndefValue{}}
@@ -32,21 +45,18 @@ func ToData(v reflect.Value) (value *Data, err error) {
 		value = &Data{Kind: &Data_ArrayValue{&DataArray{els}}}
 	case reflect.Map:
 		keys := v.MapKeys()
-		cnt := len(keys)
-		els := make([]*DataEntry, cnt)
-		var dev *Data
-		for i, k := range keys {
-			dev, err = ToData(v.MapIndex(k))
-			if err != nil {
-				return
-			}
+		hash := make(map[string]reflect.Value, len(keys))
+		for _, k := range keys {
 			if !(k.IsValid() && k.Kind() == reflect.String) {
 				err = fmt.Errorf(`expected hash key to be 'string', got '%s'`, k.Type())
 				return
 			}
-			els[i] = &DataEntry{k.String(), dev}
+			hash[k.String()] = v.MapIndex(k)
 		}
-		value = &Data{Kind: &Data_HashValue{&DataHash{els}}}
+		var dh *DataHash
+		if dh, err = ToDataHash(hash); err == nil {
+			value = &Data{Kind: &Data_HashValue{dh}}
+		}
 	default:
 		err = fmt.Errorf(`unable to convert a value of type '%s' to Data`, v.Type())
 	}
@@ -55,6 +65,19 @@ func ToData(v reflect.Value) (value *Data, err error) {
 
 var interfaceType = reflect.TypeOf([]interface{}{}).Elem()
 var stringType = reflect.TypeOf(``)
+
+func FromDataHash(h *DataHash) (map[string]reflect.Value, error) {
+	av := h.Entries
+	hash := make(map[string]reflect.Value, len(av))
+	for _, elem := range av {
+		rv, err := FromData(elem.Value)
+		if err != nil {
+			return nil, err
+		}
+		hash[elem.Key] = rv
+	}
+	return hash, nil
+}
 
 func FromData(v *Data) (value reflect.Value, err error) {
 	switch v.Kind.(type) {
