@@ -18,53 +18,61 @@ func ToDataHash(h map[string]reflect.Value) (*DataHash, error) {
 	return &DataHash{els}, nil
 }
 
-func ToData(v reflect.Value) (value *Data, err error) {
+func ToData(v reflect.Value) (*Data, error) {
 	if !v.IsValid() {
-		value = &Data{Kind: &Data_UndefValue{}}
-		return
+		return &Data{Kind: &Data_UndefValue{}}, nil
 	}
 
 	switch v.Kind() {
 	case reflect.Bool:
-		value = &Data{Kind: &Data_BooleanValue{v.Bool()}}
+		return &Data{Kind: &Data_BooleanValue{v.Bool()}}, nil
 	case reflect.Float32, reflect.Float64:
-		value = &Data{Kind: &Data_FloatValue{v.Float()}}
+		return &Data{Kind: &Data_FloatValue{v.Float()}}, nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		value = &Data{Kind: &Data_IntegerValue{v.Int()}}
+		return &Data{Kind: &Data_IntegerValue{v.Int()}}, nil
 	case reflect.String:
-		value = &Data{Kind: &Data_StringValue{v.String()}}
+		return &Data{Kind: &Data_StringValue{v.String()}}, nil
 	case reflect.Slice, reflect.Array:
 		cnt := v.Len()
 		els := make([]*Data, cnt)
 		for i := 0; i < cnt; i++ {
-			els[i], err = ToData(v.Index(i))
+			elem, err := ToData(v.Index(i))
 			if err != nil {
-				return
+				return nil, err
 			}
+			els[i] = elem
 		}
-		value = &Data{Kind: &Data_ArrayValue{&DataArray{els}}}
+		return &Data{Kind: &Data_ArrayValue{&DataArray{els}}}, nil
 	case reflect.Map:
 		keys := v.MapKeys()
 		hash := make(map[string]reflect.Value, len(keys))
 		for _, k := range keys {
 			if !(k.IsValid() && k.Kind() == reflect.String) {
-				err = fmt.Errorf(`expected hash key to be 'string', got '%s'`, k.Type())
-				return
+				return nil, fmt.Errorf(`expected hash key to be 'string', got '%s'`, k.Type())
 			}
 			hash[k.String()] = v.MapIndex(k)
 		}
-		var dh *DataHash
-		if dh, err = ToDataHash(hash); err == nil {
-			value = &Data{Kind: &Data_HashValue{dh}}
+		dh, err := ToDataHash(hash)
+		if err != nil {
+			return nil, err
 		}
+		return &Data{Kind: &Data_HashValue{dh}}, nil
+	case reflect.Interface:
+		if v.Type() == interfaceType && v.Interface() == nil {
+			// The interface{} nil value represents a generic nil
+			return &Data{Kind: &Data_UndefValue{}}, nil
+		}
+		// Other interfaces/values cannot be converted
+		fallthrough
 	default:
-		err = fmt.Errorf(`unable to convert a value of type '%s' to Data`, v.Type())
+		return nil, fmt.Errorf(`unable to convert a value of type '%s' to Data`, v.Type())
 	}
-	return
 }
 
 var interfaceType = reflect.TypeOf([]interface{}{}).Elem()
 var stringType = reflect.TypeOf(``)
+var GenericNilValue = reflect.Zero(interfaceType)
+var InvalidValue = reflect.ValueOf(nil)
 
 func FromDataHash(h *DataHash) (map[string]reflect.Value, error) {
 	av := h.Entries
@@ -79,25 +87,31 @@ func FromDataHash(h *DataHash) (map[string]reflect.Value, error) {
 	return hash, nil
 }
 
-func FromData(v *Data) (value reflect.Value, err error) {
+func FromData(v *Data) (reflect.Value, error) {
+	if v.Kind == nil {
+		return GenericNilValue, nil
+	}
+
 	switch v.Kind.(type) {
 	case *Data_BooleanValue:
-		value = reflect.ValueOf(v.GetBooleanValue())
+		return reflect.ValueOf(v.GetBooleanValue()), nil
 	case *Data_FloatValue:
-		value = reflect.ValueOf(v.GetFloatValue())
+		return reflect.ValueOf(v.GetFloatValue()), nil
 	case *Data_IntegerValue:
-		value = reflect.ValueOf(v.GetIntegerValue())
+		return reflect.ValueOf(v.GetIntegerValue()), nil
 	case *Data_StringValue:
-		value = reflect.ValueOf(v.GetStringValue())
+		return reflect.ValueOf(v.GetStringValue()), nil
 	case *Data_UndefValue:
-		value = reflect.ValueOf(nil)
+		return GenericNilValue, nil
 	case *Data_ArrayValue:
 		av := v.GetArrayValue().GetValues()
 		vals := make([]reflect.Value, len(av))
 		var et reflect.Type = nil
-		var rv reflect.Value
 		for i, elem := range av {
-			rv, err = FromData(elem)
+			rv, err := FromData(elem)
+			if err != nil {
+				return InvalidValue, err
+			}
 			rt := rv.Type()
 			if et == nil {
 				et = rt
@@ -109,16 +123,18 @@ func FromData(v *Data) (value reflect.Value, err error) {
 		if et == nil {
 			et = interfaceType
 		}
-		value = reflect.Append(reflect.MakeSlice(reflect.SliceOf(et), 0, len(vals)), vals...)
+		return reflect.Append(reflect.MakeSlice(reflect.SliceOf(et), 0, len(vals)), vals...), nil
 	case *Data_HashValue:
 		av := v.GetHashValue().Entries
 		vals := make([]reflect.Value, len(av))
 		keys := make([]reflect.Value, len(av))
 		var et reflect.Type = nil
-		var rv reflect.Value
 		for i, elem := range av {
 			keys[i] = reflect.ValueOf(elem.Key)
-			rv, err = FromData(elem.Value)
+			rv, err := FromData(elem.Value)
+			if err != nil {
+				return InvalidValue, err
+			}
 			rt := rv.Type()
 			if et == nil {
 				et = rt
@@ -129,12 +145,12 @@ func FromData(v *Data) (value reflect.Value, err error) {
 		if et == nil {
 			et = interfaceType
 		}
-		value = reflect.MakeMapWithSize(reflect.MapOf(stringType, et), len(vals))
+		hash := reflect.MakeMapWithSize(reflect.MapOf(stringType, et), len(vals))
 		for i, k := range keys {
-			value.SetMapIndex(k, vals[i])
+			hash.SetMapIndex(k, vals[i])
 		}
+		return hash, nil
 	default:
-		err = fmt.Errorf(`unable to convert a value of type '%T' to reflect.Value`, v.Kind)
+		return InvalidValue, fmt.Errorf(`unable to convert a value of type '%T' to reflect.Value`, v.Kind)
 	}
-	return
 }
