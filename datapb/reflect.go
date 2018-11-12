@@ -57,16 +57,18 @@ func ToData(v reflect.Value) (*Data, error) {
 			return nil, err
 		}
 		return &Data{Kind: &Data_HashValue{dh}}, nil
+	case reflect.Struct:
+		if v.Type().String() == `reflect.Value` {
+			return ToData(v.Interface().(reflect.Value))
+		}
 	case reflect.Interface:
 		if v.Type() == interfaceType && v.Interface() == nil {
 			// The interface{} nil value represents a generic nil
 			return &Data{Kind: &Data_UndefValue{}}, nil
 		}
-		// Other interfaces/values cannot be converted
-		fallthrough
-	default:
-		return nil, fmt.Errorf(`unable to convert a value of type '%s' to Data`, v.Type())
+		return ToData(v.Elem());
 	}
+	return nil, fmt.Errorf(`unable to convert a value of kind '%s' and type '%s' to Data`, v.Kind(), v.Type().Name())
 }
 
 var interfaceType = reflect.TypeOf([]interface{}{}).Elem()
@@ -135,6 +137,7 @@ func FromData(v *Data) (reflect.Value, error) {
 			if err != nil {
 				return InvalidValue, err
 			}
+			vals[i] = rv
 			rt := rv.Type()
 			if et == nil {
 				et = rt
