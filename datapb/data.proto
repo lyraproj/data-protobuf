@@ -1,7 +1,7 @@
 syntax = "proto3";
 package puppet.datapb;
 
-option go_package = "github.com/puppetlabs/data-protobuf/datapb";
+option go_package = "github.com/lyraproj/data-protobuf/datapb";
 
 // `DataHash` represents an ordered hash of Data values, consisting of fields
 // which map to dynamically typed values. In some languages, `DataHash`
