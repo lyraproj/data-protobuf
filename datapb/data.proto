@@ -15,7 +15,7 @@ message DataHash {
 // `DataEntry` represents one association between a key and a value
 // in the ordered `DataHash`
 message DataEntry {
-  string key = 1;
+  Data key = 1;
   Data value = 2;
 }
 
@@ -39,6 +39,10 @@ message Data {
     DataHash hash_value = 6;
     // Represents an Array[Data].
     DataArray array_value = 7;
+    // Represents a Binary
+    bytes binary_value = 8;
+    // Represents a reference to a previous element
+    int64 reference = 9;
   }
 }
 
