@@ -1,23 +1,11 @@
 package datapb
 
 import (
-	"reflect"
 	"fmt"
+	"reflect"
 )
 
-func ToDataHash(h map[string]reflect.Value) (*DataHash, error) {
-	cnt := len(h)
-	els := make([]*DataEntry, 0, cnt)
-	for k, v := range h {
-		dev, err := ToData(v)
-		if err != nil {
-			return nil, err
-		}
-		els = append(els, &DataEntry{k, dev})
-	}
-	return &DataHash{els}, nil
-}
-
+// ToData converts reflect.Value to a datapb.Data
 func ToData(v reflect.Value) (*Data, error) {
 	if !v.IsValid() {
 		return &Data{Kind: &Data_UndefValue{}}, nil
@@ -34,6 +22,10 @@ func ToData(v reflect.Value) (*Data, error) {
 		return &Data{Kind: &Data_StringValue{v.String()}}, nil
 	case reflect.Slice, reflect.Array:
 		cnt := v.Len()
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			// []byte
+			return &Data{Kind: &Data_BinaryValue{v.Bytes()}}, nil
+		}
 		els := make([]*Data, cnt)
 		for i := 0; i < cnt; i++ {
 			elem, err := ToData(v.Index(i))
@@ -44,19 +36,20 @@ func ToData(v reflect.Value) (*Data, error) {
 		}
 		return &Data{Kind: &Data_ArrayValue{&DataArray{els}}}, nil
 	case reflect.Map:
-		keys := v.MapKeys()
-		hash := make(map[string]reflect.Value, len(keys))
-		for _, k := range keys {
-			if !(k.IsValid() && k.Kind() == reflect.String) {
-				return nil, fmt.Errorf(`expected hash key to be 'string', got '%s'`, k.Type())
+		cnt := v.Len()
+		els := make([]*DataEntry, cnt)
+		for i, k := range v.MapKeys() {
+			key, err := ToData(k)
+			if err != nil {
+				return nil, err
 			}
-			hash[k.String()] = v.MapIndex(k)
+			val, err := ToData(v.MapIndex(k))
+			if err != nil {
+				return nil, err
+			}
+			els[i] = &DataEntry{key, val}
 		}
-		dh, err := ToDataHash(hash)
-		if err != nil {
-			return nil, err
-		}
-		return &Data{Kind: &Data_HashValue{dh}}, nil
+		return &Data{Kind: &Data_HashValue{&DataHash{els}}}, nil
 	case reflect.Struct:
 		if v.Type().String() == `reflect.Value` {
 			return ToData(v.Interface().(reflect.Value))
@@ -66,29 +59,16 @@ func ToData(v reflect.Value) (*Data, error) {
 			// The interface{} nil value represents a generic nil
 			return &Data{Kind: &Data_UndefValue{}}, nil
 		}
-		return ToData(v.Elem());
+		return ToData(v.Elem())
 	}
 	return nil, fmt.Errorf(`unable to convert a value of kind '%s' and type '%s' to Data`, v.Kind(), v.Type().Name())
 }
 
 var interfaceType = reflect.TypeOf([]interface{}{}).Elem()
-var stringType = reflect.TypeOf(``)
 var GenericNilValue = reflect.Zero(interfaceType)
 var InvalidValue = reflect.ValueOf(nil)
 
-func FromDataHash(h *DataHash) (map[string]reflect.Value, error) {
-	av := h.Entries
-	hash := make(map[string]reflect.Value, len(av))
-	for _, elem := range av {
-		rv, err := FromData(elem.Value)
-		if err != nil {
-			return nil, err
-		}
-		hash[elem.Key] = rv
-	}
-	return hash, nil
-}
-
+// FromData converts a datapb.Data to a reflect.Value
 func FromData(v *Data) (reflect.Value, error) {
 	if v.Kind == nil {
 		return GenericNilValue, nil
@@ -105,6 +85,8 @@ func FromData(v *Data) (reflect.Value, error) {
 		return reflect.ValueOf(v.GetStringValue()), nil
 	case *Data_UndefValue:
 		return GenericNilValue, nil
+	case *Data_BinaryValue:
+		return reflect.ValueOf(v.GetBinaryValue()), nil
 	case *Data_ArrayValue:
 		av := v.GetArrayValue().GetValues()
 		vals := make([]reflect.Value, len(av))
@@ -130,25 +112,40 @@ func FromData(v *Data) (reflect.Value, error) {
 		av := v.GetHashValue().Entries
 		vals := make([]reflect.Value, len(av))
 		keys := make([]reflect.Value, len(av))
-		var et reflect.Type = nil
+		var kType reflect.Type = nil
+		var vType reflect.Type = nil
 		for i, elem := range av {
-			keys[i] = reflect.ValueOf(elem.Key)
-			rv, err := FromData(elem.Value)
+			rv, err := FromData(elem.Key)
+			if err != nil {
+				return InvalidValue, err
+			}
+			keys[i] = rv
+			rt := rv.Type()
+			if kType == nil {
+				kType = rt
+			} else if kType != rt {
+				kType = nil
+			}
+
+			rv, err = FromData(elem.Value)
 			if err != nil {
 				return InvalidValue, err
 			}
 			vals[i] = rv
-			rt := rv.Type()
-			if et == nil {
-				et = rt
-			} else if et != rt {
-				et = nil
+			rt = rv.Type()
+			if vType == nil {
+				vType = rt
+			} else if vType != rt {
+				vType = nil
 			}
 		}
-		if et == nil {
-			et = interfaceType
+		if kType == nil {
+			kType = interfaceType
 		}
-		hash := reflect.MakeMapWithSize(reflect.MapOf(stringType, et), len(vals))
+		if vType == nil {
+			vType = interfaceType
+		}
+		hash := reflect.MakeMapWithSize(reflect.MapOf(kType, vType), len(vals))
 		for i, k := range keys {
 			hash.SetMapIndex(k, vals[i])
 		}
